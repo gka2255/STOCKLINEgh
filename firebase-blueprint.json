@@ -1,0 +1,119 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Authenticated restaurant employee with role-based permissions in StockLine.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["manager", "storekeeper", "staff"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "email", "role", "isActive", "createdAt"]
+    },
+    "StockItem": {
+      "title": "StockItem",
+      "description": "Master restaurant inventory item catalog record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "category": { "type": "string" },
+        "unit": { "type": "string", "enum": ["kg", "litres", "pieces", "packs", "crates"] },
+        "reorderLevel": { "type": "number" },
+        "defaultSupplierId": { "type": ["string", "null"] },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "category", "unit", "reorderLevel", "isActive", "createdAt"]
+    },
+    "StockBatch": {
+      "title": "StockBatch",
+      "description": "Specific stock batch received into inventory for FIFO tracking.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemId": { "type": "string" },
+        "quantityReceived": { "type": "number" },
+        "quantityRemaining": { "type": "number" },
+        "costPerUnit": { "type": "number" },
+        "dateReceived": { "type": "string" },
+        "expiryDate": { "type": ["string", "null"] },
+        "supplierId": { "type": ["string", "null"] },
+        "purchaseId": { "type": ["string", "null"] },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "itemId", "quantityReceived", "quantityRemaining", "costPerUnit", "dateReceived", "createdAt"]
+    },
+    "StockMovement": {
+      "title": "StockMovement",
+      "description": "Append-only immutable audit trail recording every inventory alteration.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "itemId": { "type": "string" },
+        "batchId": { "type": "string" },
+        "type": { "type": "string", "enum": ["received", "used", "wasted", "adjusted"] },
+        "quantity": { "type": "number" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "note": { "type": "string" },
+        "requisitionId": { "type": ["string", "null"] },
+        "requisitionNumber": { "type": ["string", "null"] }
+      },
+      "required": ["id", "itemId", "batchId", "type", "quantity", "userId", "userName", "timestamp", "note"]
+    },
+    "Requisition": {
+      "title": "Requisition",
+      "description": "Kitchen and department stock requisitions and walk-in issues.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "requisitionNumber": { "type": "string" },
+        "requestedBy": { "type": "object" },
+        "department": { "type": "string", "enum": ["Kitchen", "Bar", "Service", "Other"] },
+        "status": { "type": "string", "enum": ["pending", "issued", "rejected"] },
+        "lines": { "type": "array" },
+        "note": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "issuedBy": { "type": ["object", "null"] },
+        "issuedAt": { "type": ["string", "null"] },
+        "rejectionReason": { "type": ["string", "null"] },
+        "isDirectIssue": { "type": ["boolean", "null"] }
+      },
+      "required": ["id", "requisitionNumber", "requestedBy", "department", "status", "lines", "createdAt"]
+    },
+    "StockAlert": {
+      "title": "StockAlert",
+      "description": "Automated warnings and critical alerts for stock levels and exhaustion.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string", "enum": ["low_stock", "finished_stock", "stock_updated"] },
+        "itemId": { "type": "string" },
+        "itemName": { "type": "string" },
+        "message": { "type": "string" },
+        "severity": { "type": "string", "enum": ["warning", "critical", "info"] },
+        "triggeredBy": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "readBy": { "type": "array" },
+        "resolved": { "type": "boolean" }
+      },
+      "required": ["id", "type", "itemId", "itemName", "message", "severity", "triggeredBy", "createdAt", "readBy", "resolved"]
+    }
+  },
+  "firestore": {
+    "collections": {
+      "/users/{userId}": { "entity": "User" },
+      "/stockItems/{itemId}": { "entity": "StockItem" },
+      "/stockBatches/{batchId}": { "entity": "StockBatch" },
+      "/stockMovements/{movementId}": { "entity": "StockMovement" },
+      "/requisitions/{reqId}": { "entity": "Requisition" },
+      "/alerts/{alertId}": { "entity": "StockAlert" }
+    }
+  }
+}

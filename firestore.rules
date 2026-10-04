@@ -1,0 +1,275 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // HELPER FUNCTIONS
+    // ==========================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the current user exists in /users/{uid} and is active
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isActiveUser() {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             getUserDoc().isActive == true;
+    }
+
+    function getUserRole() {
+      return getUserDoc().role;
+    }
+
+    function isManager() {
+      return isActiveUser() && getUserRole() == 'manager';
+    }
+
+    function isStorekeeper() {
+      return isActiveUser() && getUserRole() == 'storekeeper';
+    }
+
+    function hasStockWriteRole() {
+      return isManager() || isStorekeeper();
+    }
+
+    // ==========================================
+    // USERS COLLECTION
+    // ==========================================
+    match /users/{userId} {
+      // Authenticated active users can read their own profile; managers can read all
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isManager());
+
+      // Only managers can create users
+      allow create: if isManager() &&
+                    request.resource.data.uid == userId &&
+                    request.resource.data.role in ['manager', 'storekeeper', 'staff'] &&
+                    request.resource.data.isActive is bool;
+
+      // Only managers can update user roles and activation status; self-deactivation is blocked
+      allow update: if isManager() &&
+                    (userId != request.auth.uid || request.resource.data.isActive == true) &&
+                    request.resource.data.role in ['manager', 'storekeeper', 'staff'];
+
+      // Deletion is strictly disallowed (accounts are deactivated, never deleted)
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // STOCK ITEMS (Firestore "stockItems")
+    // ==========================================
+    match /stockItems/{itemId} {
+      // Any authenticated active employee can read catalog items
+      allow read: if isActiveUser();
+
+      // Only managers and storekeepers can add or edit stock items
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.name is string &&
+                    request.resource.data.name.size() > 0 &&
+                    request.resource.data.unit in ['kg', 'litres', 'pieces', 'packs', 'crates'] &&
+                    request.resource.data.reorderLevel is number &&
+                    request.resource.data.reorderLevel >= 0 &&
+                    request.resource.data.isActive is bool;
+
+      allow update: if hasStockWriteRole() &&
+                    request.resource.data.unit in ['kg', 'litres', 'pieces', 'packs', 'crates'] &&
+                    request.resource.data.reorderLevel is number &&
+                    request.resource.data.reorderLevel >= 0;
+
+      // Never hard delete stock items (use isActive = false)
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // STOCK BATCHES (Firestore "stockBatches")
+    // ==========================================
+    match /stockBatches/{batchId} {
+      // Storekeepers and managers can view batches. Staff cannot see costs or batches.
+      allow read: if hasStockWriteRole();
+
+      // Only managers and storekeepers can receive stock or adjust quantities
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.itemId is string &&
+                    request.resource.data.quantityReceived is number &&
+                    request.resource.data.quantityReceived > 0 &&
+                    request.resource.data.quantityRemaining is number &&
+                    request.resource.data.quantityRemaining >= 0 &&
+                    request.resource.data.costPerUnit is number &&
+                    request.resource.data.costPerUnit >= 0;
+
+      allow update: if hasStockWriteRole() &&
+                    request.resource.data.quantityRemaining is number &&
+                    request.resource.data.quantityRemaining >= 0;
+
+      // Batches can never be deleted
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // STOCK MOVEMENTS (Firestore "stockMovements")
+    // IMMUTABLE AUDIT TRAIL
+    // ==========================================
+    match /stockMovements/{movementId} {
+      // Storekeepers and managers can view the movements ledger
+      allow read: if hasStockWriteRole();
+
+      // Stock movements can be recorded as part of transactions
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.type in ['received', 'used', 'wasted', 'adjusted'] &&
+                    request.resource.data.quantity is number &&
+                    request.resource.data.quantity > 0 &&
+                    request.resource.data.userId == request.auth.uid;
+
+      // MOVEMENTS CAN NEVER BE EDITED OR DELETED
+      allow update, delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 2: REQUISITIONS (Firestore "requisitions")
+    // ==========================================
+    match /requisitions/{reqId} {
+      // Staff can ONLY read their own requisitions. Managers & Storekeepers can read all.
+      allow read: if isActiveUser() && (
+        hasStockWriteRole() ||
+        resource.data.requestedBy.userId == request.auth.uid
+      );
+
+      // Staff can create pending requisitions for themselves. Storekeepers/Managers can create direct issues.
+      allow create: if isActiveUser() && (
+        (request.resource.data.status == 'pending' &&
+         request.resource.data.requestedBy.userId == request.auth.uid) ||
+        (hasStockWriteRole() && request.resource.data.status in ['pending', 'issued'])
+      );
+
+      // Only Storekeeper or Manager can transition status (issue or reject)
+      allow update: if hasStockWriteRole() &&
+                    request.resource.data.status in ['pending', 'issued', 'rejected'];
+
+      // Requisitions can never be deleted
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 2: STOCK ALERTS (Firestore "alerts")
+    // ==========================================
+    match /alerts/{alertId} {
+      // Only Storekeepers and Managers can read and interact with alerts
+      allow read: if hasStockWriteRole();
+
+      // Alerts are generated inside transactions by storekeepers and managers
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.type in ['low_stock', 'finished_stock', 'stock_updated', 'payment_due_soon', 'payment_overdue'] &&
+                    request.resource.data.severity in ['warning', 'critical', 'info'];
+
+      // Storekeepers and managers can mark alerts as read or resolved
+      allow update: if hasStockWriteRole();
+
+      // Alerts can never be deleted
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 3: SUPPLIERS (Firestore "suppliers")
+    // ==========================================
+    match /suppliers/{supplierId} {
+      // Storekeepers and Managers have full access to supplier profiles
+      allow read: if hasStockWriteRole();
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.name is string &&
+                    request.resource.data.phone is string &&
+                    request.resource.data.tin is string &&
+                    request.resource.data.isActive == true;
+      allow update: if hasStockWriteRole();
+      // Soft deletion only (isActive: false) - never hard deleted
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 3: PURCHASES / DELIVERIES (Firestore "purchases")
+    // ==========================================
+    match /purchases/{purchaseId} {
+      // Storekeepers and Managers can view and manage purchases
+      allow read: if hasStockWriteRole();
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.purchaseNumber is string &&
+                    request.resource.data.supplierId is string &&
+                    request.resource.data.paymentStatus in ['unpaid', 'partial', 'paid'];
+      // Update allowed when payment transactions update amountPaid and arrears
+      allow update: if hasStockWriteRole() &&
+                    request.resource.data.paymentStatus in ['unpaid', 'partial', 'paid'];
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 3: PAYMENTS (Firestore "supplierPayments")
+    // ==========================================
+    match /supplierPayments/{paymentId} {
+      allow read: if hasStockWriteRole();
+      allow create: if hasStockWriteRole() &&
+                    request.resource.data.purchaseId is string &&
+                    request.resource.data.supplierId is string &&
+                    request.resource.data.amount > 0 &&
+                    request.resource.data.method in ['cash', 'cheque', 'momo'];
+      // Payments cannot be edited or deleted (immutable financial ledger)
+      allow update, delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 4: TAX SETTINGS (Firestore "taxSettings")
+    // Manager-only writable, Storekeeper readable
+    // ==========================================
+    match /taxSettings/{settingId} {
+      allow read: if hasStockWriteRole();
+      // Only Restaurant General Manager can modify statutory tax rates
+      allow create, update: if isManager() &&
+                            request.resource.data.vatRate is number &&
+                            request.resource.data.nhilRate is number &&
+                            request.resource.data.getfundRate is number &&
+                            request.resource.data.pricesEnteredAs in ['exclusive', 'inclusive'] &&
+                            request.resource.data.isVatRegistered is bool;
+      allow delete: if false;
+    }
+
+    // Audit log for tax settings changes
+    match /taxSettingsHistory/{historyId} {
+      allow read: if hasStockWriteRole();
+      allow create: if isManager();
+      allow update, delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 4: TAX SUMMARIES (Firestore "taxSummaries")
+    // Updated atomically in transactions by storekeeper & manager
+    // ==========================================
+    match /taxSummaries/{summaryId} {
+      allow read: if hasStockWriteRole();
+      allow create, update: if hasStockWriteRole() &&
+                            request.resource.data.periodType in ['day', 'week', 'month'];
+      allow delete: if false;
+    }
+
+    // ==========================================
+    // MODULE 4: TAX RETURNS (Firestore "taxReturns")
+    // Filed returns are immutable and can never be edited or deleted
+    // ==========================================
+    match /taxReturns/{returnId} {
+      allow read: if hasStockWriteRole();
+      allow create: if hasStockWriteRole();
+      // Only Manager can submit/file returns. Once status is 'Filed', cannot be edited or modified
+      allow update: if isManager() &&
+                    resource.data.status != 'Filed' &&
+                    request.resource.data.status == 'Filed';
+      // Filed returns can NEVER be deleted
+      allow delete: if false;
+    }
+  }
+}

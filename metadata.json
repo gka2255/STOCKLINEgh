@@ -1,0 +1,8 @@
+{
+  "name": "StockLine Ghana",
+  "description": "A modular restaurant stock management system featuring role-based access, inventory tracking, batch monitoring, and secure logistics control.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
